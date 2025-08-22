@@ -1,0 +1,182 @@
+Name: Anjali Gupta
+CWID: 20023660
+Pledge: I pledge my honor that I have abided by the Stevens Honor System - AG
+
+/*
+Query 1: For each product and month, count the number of sales transactions that were
+		between the previous and the following month's average sales quantities. For
+		January and December, you can display <NULL> or 0; alternatively, you can skip
+		those months (those that do not have averages for the previous and/or following
+		months).
+*/ 
+
+-- create a reference table by computing the avg(quant) for (current_month - 1) and (current_month + 1)
+
+with t1 as (
+	-- first compute the averages for each prod/month combination 
+	select prod, month, round(avg(quant), 0) as avg_quant  
+	from sales
+	group by prod, month
+	order by prod, month
+),
+t2 as (
+	-- display prev_avg
+	-- join it with itself, use where condition (month - 1 = month)
+	select t.prod, t.month, t1.avg_quant as prev_avg
+	from t1 as t
+	left join t1
+	on t.prod = t1.prod and t1.month = t.month - 1
+	order by t.prod, t.month	
+),
+t3 as (
+	-- display next_avg
+	select t.prod, t.month, t1.avg_quant as next_avg
+	from t1 as t
+	left join t1
+	on t.prod = t1.prod and t1.month = t.month + 1
+	order by t.prod, t.month
+),
+t4 as (
+	-- join both prev_avg and next_avg together 
+	select t2.prod as product, t2.month as month_a, t2.prev_avg, t3.next_avg
+	from t2 natural join t3 
+	where t2.prod = t3.prod and t2.month = t3.month
+	order by t2.prod, t2.month 
+)
+
+-- create a another table that displays months with 0, left outer join with query below 
+select s.prod, s.month, count(s.quant) as sales_count_btw_avgs
+from sales s, t4 as r 
+where s.prod = r.product 
+and s.month = r.month_a 
+and ((s.quant between r.prev_avg and r.next_avg) or (s.quant between r.next_avg and r.prev_avg))
+group by s.prod, s.month
+order by s.prod, s.month 
+
+/*
+Query 2: For customer and product, show the average sales before, during and after each
+		quarter (e.g., for Q2, show average sales of Q1 and Q3. For “before” Q1 and “after”
+		Q4, display <NULL>. The “YEAR” attribute is not considered for this query – for
+		example, both Q1 of 2007 and Q1 of 2008 are considered Q1 regardless of the year.
+
+*/ 
+
+-- step 1: create an extended sales table by adding "quarter" to the sales table 
+
+with ext_sales as (
+	select cust, prod, month, ceiling(month/3.0) as qtr, quant
+	from sales 
+	order by cust, prod, month 
+),
+-- step 2: create a base table for avgs for (cust,prod,quarter)
+t2 as (
+	select cust, prod, qtr, round(avg(quant), 0) as during_average 
+	from ext_sales 
+	group by cust, prod, qtr 
+	order by cust, prod, qtr 
+),
+-- step 3: join 2 copies of base table to compute avg for BEFORE quarters 
+t3 as (
+	select t.cust, t.prod, t.qtr, t2.during_average as before_average 
+	from t2 as t 
+	full outer join t2 
+	on t2.cust = t.cust and t2.prod = t.prod and t2.qtr = t.qtr - 1
+	order by t.cust, t.prod, t.qtr 
+),
+-- step 4: join 2 copies of base table to compute avg for AFTER quarters 
+t4 as (
+	select t.cust, t.prod, t.qtr, t2.during_average as after_average 
+	from t2 as t 
+	full outer join t2 
+	on t2.cust = t.cust and t2.prod = t.prod and t2.qtr = t.qtr + 1
+	order by t.cust, t.prod, t.qtr  
+)
+-- step 5: join outputs with BEFORE_AVG, AFTER_AVG and DURING_AVG
+select * 
+from t3 natural join t2 natural join t4
+order by cust, prod,  qtr
+
+
+/*
+Query 3: For each customer, product and state combination, compute (1) the product’s average
+		sale of this customer for the state (i.e., the simple AVG for the group-by attributes –
+		this is the easy part), (2) the average sale of the product and the state but for all of the
+		other customers and (3) the customer’s average sale for the given state, but for all of
+		the other products.
+*/
+
+-- step 1: create a base table by computing current avg for (cust, prod, state)
+with base as (
+	select cust, prod, state, round(avg(quant), 0) as current_avg
+	from sales
+	group by cust, prod, state
+	order by cust, prod
+),
+-- step 2: join output from base with sales to compute OTHER_PROD_AVG
+t1 as (
+	select b.cust, b.prod, b.state, round(avg(s.quant), 0) as other_prod_avg
+	from base as b, sales as s 
+	where b.cust = s.cust and b.state = s.state and b.prod != s.prod
+	group by b.cust, b.prod, b.state
+	order by b.cust, b.prod 
+),
+-- step 3: join output from base with sales to compute OTHER_CUST_AVG
+t2 as (
+	select b.cust, b.prod, b.state, round(avg(s.quant), 0) as other_cust_avg
+	from base as b, sales as s 
+	where b.cust != s.cust and b.state = s.state and b.prod = s.prod
+	group by b.cust, b.prod, b.state
+	order by b.cust, b.prod 
+)
+-- step 4: join output from base, t1 and t2
+select cust, prod, state, base.current_avg as prod_avg, t2.other_cust_avg, t1.other_prod_avg 
+from base natural join t1 natural join t2
+order by cust, prod, state
+
+/*
+Query 4: For each product, find the median sales quantity (assume an odd number of sales for
+		simplicity of presentation). (NOTE – “median” is defined as “denoting or relating to a
+		value or quantity lying at the midpoint of a frequency distribution of observed values or
+		quantities, such that there is an equal probability of falling above or below it.” E.g.,
+		Median value of the list {13, 23, 12, 16, 15, 9, 29} is 15
+
+From OH's: 
+-> first create table that computes the ordered position 
+-> second, create a second table that generates median position 
+->third, display distinct prod where ordered position matches with median position 
+*/
+with base  as (
+	select prod, quant
+	from sales 
+	order by prod, quant
+),
+pos as (
+	-- first compute ordered position 
+	select b.prod, b.quant, count(s.quant) as order_pos 
+	from base b, sales s
+	where s.quant <= b.quant and b.prod = s.prod
+	group by b.prod, b.quant
+	order by b.prod, b.quant
+),
+median as (
+	-- compute median pos
+	select prod, ceiling(count(quant)/2) as val 
+	from sales 
+	group by prod
+),
+t3 as (
+	-- order_pos that are greater than or equal to median's val
+	select pos.prod, pos.order_pos
+	from pos natural join median
+	where pos.order_pos >= median.val
+),
+t4 as (
+	-- select the minimum of previous 
+	select prod, min(order_pos) as pos_1
+	from t3
+	group by prod
+)
+select distinct t4.prod as product, p.quant as median_quant
+from pos as p 
+join t4 on (p.prod = t4.prod and t4.pos_1 = p.order_pos)
+order by t4.prod
